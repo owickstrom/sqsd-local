@@ -19,8 +19,20 @@ sqsd-local http://localhost:8080 my-worker-queue-name my-deadletter-queue-name
 Requirements:
 
 * [Stack](https://docs.haskellstack.org/en/stable/README/)
+* The `stack path --bin-path` on your `PATH`
+
+**Install from Hackage:**
 
 ```bash
+stack install sqsd-local
+```
+
+**Install from source:**
+
+```bash
+git clone git@github.com:owickstrom/sqsd-local.git
+cd sqsd-local
+stack setup
 stack install
 ```
 
