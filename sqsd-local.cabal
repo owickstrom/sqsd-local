@@ -22,6 +22,7 @@ executable sqsd-local
                      , base >= 4.7 && < 5
                      , case-insensitive >= 1.2.0.7
                      , exceptions >= 0.8.3
+                     , http-client >= 0.4.31.2
                      , lens
                      , resourcet >= 1.1.9
                      , text

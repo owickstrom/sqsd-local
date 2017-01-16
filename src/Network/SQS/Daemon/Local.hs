@@ -1,9 +1,14 @@
 {-# LANGUAGE NamedFieldPuns      #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell     #-}
 module Network.SQS.Daemon.Local
     ( startDaemon
     , DaemonOptions(..)
+    , workerUrl
+    , workerQueueName
+    , deadLetterQueueName
+    , httpTimeout
     ) where
 
 import           Control.Lens
@@ -15,24 +20,42 @@ import           Control.Monad.Trans.Resource
 import           Data.CaseInsensitive
 import           Data.HashMap.Strict          (HashMap)
 import qualified Data.HashMap.Strict          as HM
+import           Data.Maybe
 import           Data.Monoid
 import           Data.Text                    (Text, unpack)
 import           Data.Text.Encoding
 import           Data.Text.IO                 as Text
 import           Network.AWS.SQS
+import           Network.HTTP.Client          (defaultManagerSettings,
+                                               managerResponseTimeout)
 import           Network.Wreq
 import           System.IO
 import           Text.Printf
 
-data QueueUrls = QueueUrls { workerQueueUrl     :: Text
-                           , deadLetterQueueUrl :: Text
-                           }
+data DaemonOptions
+  = DaemonOptions { _workerUrl           :: Text
+                  , _workerQueueName     :: Text
+                  , _deadLetterQueueName :: Maybe Text
+                  , _httpTimeout         :: Maybe Int
+                  } deriving (Show, Eq, Ord)
+
+makeLenses ''DaemonOptions
+
+data WithUrls o
+  = WithUrls { _daemonOptions      :: o
+             , _workerQueueUrl     :: Text
+             , _deadLetterQueueUrl :: Maybe Text
+             } deriving (Show, Eq, Ord)
+
+makeLenses ''WithUrls
 
 say :: MonadIO m => Text -> m ()
 say = liftIO . Text.putStrLn
 
+
 getQueueUrl :: (MonadCatch a, MonadResource a) => Text -> AWST a Text
 getQueueUrl = fmap (view gqursQueueURL) . send . getQueueURL
+
 
 addAttributeHeaders :: Options
                     -> HashMap Text MessageAttributeValue
@@ -47,6 +70,7 @@ addAttributeHeaders =
           in opts' & header headerName .~ [encodeUtf8 value]
         Nothing    -> opts'
 
+
 deleteMessageByReceiptHandle :: (MonadCatch m, MonadResource m)
                              => Text
                              -> Text
@@ -55,66 +79,69 @@ deleteMessageByReceiptHandle url receiptHandle = do
   void (send (deleteMessage url receiptHandle))
   liftIO (printf "Deleted message from queue: %s\n" url)
 
+
 sendToDeadLetterQueueAndDelete :: (MonadCatch m, MonadResource m)
-                             => QueueUrls
+                             => WithUrls DaemonOptions
                              -> Text
                              -> Text
                              -> HashMap Text MessageAttributeValue
                              -> AWST m ()
-sendToDeadLetterQueueAndDelete urls receiptHandle body attrs = do
-  let dlqMsg = sendMessage (deadLetterQueueUrl urls) body
-               & smMessageAttributes .~ attrs
-  void (send dlqMsg)
-  say "Sent message to dead letter queue, deleting."
-  void (send (deleteMessage (workerQueueUrl urls) receiptHandle))
+sendToDeadLetterQueueAndDelete opts receiptHandle body attrs = do
+  -- Only send to dead letter queue if specified.
+  case opts ^. deadLetterQueueUrl of
+    Just dlqUrl -> do
+      let dlqMsg = sendMessage dlqUrl body
+                   & smMessageAttributes .~ attrs
+      void (send dlqMsg)
+      say "Sent message to dead letter queue."
+    Nothing -> return ()
+
+  say "Deleting handled message from worker queue."
+  void (send (deleteMessage (opts ^. workerQueueUrl) receiptHandle))
+
 
 forwardMessage :: (MonadCatch m, MonadResource m)
-               => Text
-               -> QueueUrls
+               => WithUrls DaemonOptions
                -> Message
                -> AWST m ()
-forwardMessage workerUrl urls msg =
+forwardMessage o msg =
   case (msg ^. mReceiptHandle, msg ^. mBody) of
     (Just receiptHandle, Just body) -> do
       let attrs = msg ^. mMessageAttributes
+          timeout' = (* 1000000) <$> o ^. daemonOptions . httpTimeout
           opts = defaults `addAttributeHeaders` attrs
                  & header "content-type" .~ ["application/json"]
-          req = postWith opts (unpack workerUrl) (encodeUtf8 body)
+                 & manager .~ Left (defaultManagerSettings { managerResponseTimeout = timeout' })
+          req = postWith opts (unpack (o ^. daemonOptions . workerUrl)) (encodeUtf8 body)
       result <- liftIO (try req)
       case result of
         Right res | res ^. responseStatus . statusCode == 200 ->
-          deleteMessageByReceiptHandle (workerQueueUrl urls) receiptHandle
+          deleteMessageByReceiptHandle (o ^. workerQueueUrl) receiptHandle
         Right res -> do
           liftIO (printf "Worker failed with status code: %d\n" (res ^. responseStatus . statusCode))
-          sendToDeadLetterQueueAndDelete urls receiptHandle body attrs
+          sendToDeadLetterQueueAndDelete o receiptHandle body attrs
         Left (e :: HttpException) -> do
           liftIO (printf "Worker request failed: %s\n" (show e))
-          sendToDeadLetterQueueAndDelete urls receiptHandle body attrs
+          sendToDeadLetterQueueAndDelete o receiptHandle body attrs
 
     (Nothing, _) -> say "Message had no reciept handle, ignoring."
     (_, Nothing) -> say "Message had no body, ignoring."
 
+
 receiveNext :: (MonadCatch m, MonadResource m)
-            => Text
-            -> QueueUrls
+            => WithUrls DaemonOptions
             -> AWST m ()
-receiveNext workerUrl urls = do
+receiveNext o = do
   msgs <- view rmrsMessages
-         <$> send (receiveMessage (workerQueueUrl urls) & rmWaitTimeSeconds ?~ 20)
+         <$> send (receiveMessage (o ^. workerQueueUrl) & rmWaitTimeSeconds ?~ 20)
   unless (null msgs) $
     liftIO (printf "Received %d new messages, posting to worker.\n" (length msgs))
-  forM_ msgs (forwardMessage workerUrl urls)
+  forM_ msgs (forwardMessage o)
 
-
-data DaemonOptions
-  = DaemonOptions { workerUrl           :: Text
-                  , workerQueueName     :: Text
-                  , deadletterQueueName :: Text
-                  }
 
 startDaemon :: DaemonOptions
             -> IO ()
-startDaemon (DaemonOptions {workerUrl, workerQueueName, deadletterQueueName}) = do
+startDaemon opts = do
   let region = Ireland
   lgr <- newLogger Info stdout
   env <- newEnv region Discover <&> set envLogger lgr
@@ -123,6 +150,12 @@ startDaemon (DaemonOptions {workerUrl, workerQueueName, deadletterQueueName}) = 
 
   runResourceT . runAWST env . within region $
     reconfigure sqsEndpoint $ do
+      o <- WithUrls opts
+          <$> getQueueUrl (opts ^. workerQueueName)
+          <*> maybe (return Nothing) (fmap Just . getQueueUrl) (opts ^. deadLetterQueueName)
+
+      when (isNothing (o ^. deadLetterQueueUrl)) $
+        say "No dead letter queue specified."
+
       say "Starting local SQSD. Awaiting messages..."
-      urls <- QueueUrls <$> getQueueUrl workerQueueName <*> getQueueUrl deadletterQueueName
-      void (forever (receiveNext workerUrl urls))
+      void (forever (receiveNext o))
