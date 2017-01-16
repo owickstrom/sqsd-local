@@ -16,6 +16,8 @@ Options:
   -d NAME        --dead-letter-queue-name=NAME  Name of the SQS queue to send messages to which the worker failed processing (no default)
   -T NAME        --http-timeout=NAME            Timeout in seconds for the HTTP POST request to worker (default: 30)
   -C MEDIA_TYPE  --content-type=MEDIA_TYPE      Content-Type header value to use in HTTP POST request to worker (default: application/octet-stream)
+                 --sqs-host=MEDIA_TYPE          SQS endpoint host (default: localhost)
+                 --sqs-port=MEDIA_TYPE          SQS endpoint port (default: 9324)
 ```
 
 ## Install/Build

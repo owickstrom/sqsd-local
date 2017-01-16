@@ -31,6 +31,8 @@ defaultOptions workerQueueName' =
                                            , _deadLetterQueueName = Nothing
                                            , _httpTimeout = Just 30
                                            , _contentType = BS.pack "application/octet-stream"
+                                           , _sqsHost = BS.pack "localhost"
+                                           , _sqsPort = 9324
                                            }
           , _showHelp = False
           , _showVersion = False
@@ -62,6 +64,12 @@ options =
   , Option "C" ["content-type"]
     (ReqArg (set (daemonOptions . contentType) . BS.pack) "MEDIA_TYPE")
     "Content-Type header value to use in HTTP POST request to worker (default: application/octet-stream)"
+  , Option "" ["sqs-host"]
+    (ReqArg (set (daemonOptions . sqsHost) . BS.pack) "MEDIA_TYPE")
+    "SQS endpoint host (default: localhost)"
+  , Option "" ["sqs-port"]
+    (ReqArg (set (daemonOptions . sqsPort) . maybe 9324 id . readMaybe) "MEDIA_TYPE")
+    "SQS endpoint port (default: 9324)"
   ]
 
 usage :: String

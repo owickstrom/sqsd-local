@@ -10,6 +10,8 @@ module Network.SQS.Daemon.Local
     , deadLetterQueueName
     , httpTimeout
     , contentType
+    , sqsHost
+    , sqsPort
     ) where
 
 import           Control.Lens
@@ -41,6 +43,8 @@ data DaemonOptions
                   , _deadLetterQueueName :: Maybe Text
                   , _httpTimeout         :: Maybe Int
                   , _contentType         :: ByteString
+                  , _sqsHost             :: ByteString
+                  , _sqsPort             :: Int
                   } deriving (Show, Eq, Ord)
 
 makeLenses ''DaemonOptions
@@ -150,7 +154,7 @@ startDaemon opts = do
   lgr <- newLogger Info stdout
   env <- newEnv region Discover <&> set envLogger lgr
 
-  let sqsEndpoint = setEndpoint False "localhost" 9324 sqs
+  let sqsEndpoint = setEndpoint False (opts ^. sqsHost) (opts ^. sqsPort) sqs
 
   runResourceT . runAWST env . within region $
     reconfigure sqsEndpoint $ do
