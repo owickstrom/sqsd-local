@@ -25,6 +25,7 @@ executable sqsd-local
                      , exceptions >= 0.8.3
                      , http-client >= 0.4.31.2
                      , lens
+                     , lifted-base >= 0.2.3.8
                      , resourcet >= 1.1.9
                      , text
                      , unordered-containers >= 0.2.7.2

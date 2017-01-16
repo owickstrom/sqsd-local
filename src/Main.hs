@@ -33,6 +33,7 @@ defaultOptions workerQueueName' =
                                            , _contentType = BS.pack "application/octet-stream"
                                            , _sqsHost = BS.pack "localhost"
                                            , _sqsPort = 9324
+                                           , _forked = False
                                            }
           , _showHelp = False
           , _showVersion = False
@@ -70,6 +71,9 @@ options =
   , Option "" ["sqs-port"]
     (ReqArg (set (daemonOptions . sqsPort) . maybe 9324 id . readMaybe) "MEDIA_TYPE")
     "SQS endpoint port (default: 9324)"
+  , Option "" ["forked"]
+    (NoArg (set (daemonOptions . forked) True))
+    "If messages should be POSTed to the worker concurrently (default: false)"
   ]
 
 usage :: String

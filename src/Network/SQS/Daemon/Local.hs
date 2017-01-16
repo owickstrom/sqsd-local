@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE NamedFieldPuns      #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -12,8 +13,10 @@ module Network.SQS.Daemon.Local
     , contentType
     , sqsHost
     , sqsPort
+    , forked
     ) where
 
+import           Control.Concurrent.Lifted
 import           Control.Lens
 import           Control.Monad
 import           Control.Monad.Catch
@@ -45,6 +48,7 @@ data DaemonOptions
                   , _contentType         :: ByteString
                   , _sqsHost             :: ByteString
                   , _sqsPort             :: Int
+                  , _forked :: Bool
                   } deriving (Show, Eq, Ord)
 
 makeLenses ''DaemonOptions
@@ -136,27 +140,37 @@ forwardMessage o msg =
     (_, Nothing) -> say "Message had no body, ignoring."
 
 
-receiveNext :: (MonadCatch m, MonadResource m)
+receiveNext :: (MonadCatch m, MonadResource m, MonadBaseControl IO m)
             => WithUrls DaemonOptions
             -> AWST m ()
 receiveNext o = do
   msgs <- view rmrsMessages
-         <$> send (receiveMessage (o ^. workerQueueUrl) & rmWaitTimeSeconds ?~ 20)
+         <$> send (receiveMessage (o ^. workerQueueUrl)
+                   & rmMaxNumberOfMessages ?~ 10
+                   & rmWaitTimeSeconds ?~ 20)
+
+
   unless (Prelude.null msgs) $
-    liftIO (printf "Received %d new messages, posting to worker.\n" (Prelude.length msgs))
-  forM_ msgs (forwardMessage o)
+    let forkedMsg = if o ^. daemonOptions . forked
+                    then "concurrent"
+                    else "serialized"
+    in liftIO (printf "Received %d new messages, posting to worker (%s).\n"
+               (Prelude.length msgs)
+               (forkedMsg :: String))
+
+  let process = if o ^. daemonOptions . forked then void . fork else void
+  forM_ msgs (process . forwardMessage o)
 
 
 startDaemon :: DaemonOptions
             -> IO ()
 startDaemon opts = do
-  let region = Ireland
   lgr <- newLogger Info stdout
-  env <- newEnv region Discover <&> set envLogger lgr
+  env <- newEnv Ireland Discover <&> set envLogger lgr
 
   let sqsEndpoint = setEndpoint False (opts ^. sqsHost) (opts ^. sqsPort) sqs
 
-  runResourceT . runAWST env . within region $
+  runResourceT . runAWST env $
     reconfigure sqsEndpoint $ do
       o <- WithUrls opts
           <$> getQueueUrl (opts ^. workerQueueName)
