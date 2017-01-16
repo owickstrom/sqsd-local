@@ -9,6 +9,7 @@ module Network.SQS.Daemon.Local
     , workerQueueName
     , deadLetterQueueName
     , httpTimeout
+    , contentType
     ) where
 
 import           Control.Lens
@@ -17,12 +18,14 @@ import           Control.Monad.Catch
 import           Control.Monad.IO.Class
 import           Control.Monad.Trans.AWS
 import           Control.Monad.Trans.Resource
+import           Data.ByteString              (ByteString)
 import           Data.CaseInsensitive
 import           Data.HashMap.Strict          (HashMap)
 import qualified Data.HashMap.Strict          as HM
 import           Data.Maybe
 import           Data.Monoid
-import           Data.Text                    (Text, unpack)
+import           Data.Text                    (Text)
+import qualified Data.Text                    as Text
 import           Data.Text.Encoding
 import           Data.Text.IO                 as Text
 import           Network.AWS.SQS
@@ -37,6 +40,7 @@ data DaemonOptions
                   , _workerQueueName     :: Text
                   , _deadLetterQueueName :: Maybe Text
                   , _httpTimeout         :: Maybe Int
+                  , _contentType         :: ByteString
                   } deriving (Show, Eq, Ord)
 
 makeLenses ''DaemonOptions
@@ -110,9 +114,9 @@ forwardMessage o msg =
       let attrs = msg ^. mMessageAttributes
           timeout' = (* 1000000) <$> o ^. daemonOptions . httpTimeout
           opts = defaults `addAttributeHeaders` attrs
-                 & header "content-type" .~ ["application/json"]
+                 & header "content-type" .~ [o ^. daemonOptions . contentType]
                  & manager .~ Left (defaultManagerSettings { managerResponseTimeout = timeout' })
-          req = postWith opts (unpack (o ^. daemonOptions . workerUrl)) (encodeUtf8 body)
+          req = postWith opts (Text.unpack (o ^. daemonOptions . workerUrl)) (encodeUtf8 body)
       result <- liftIO (try req)
       case result of
         Right res | res ^. responseStatus . statusCode == 200 ->
@@ -134,8 +138,8 @@ receiveNext :: (MonadCatch m, MonadResource m)
 receiveNext o = do
   msgs <- view rmrsMessages
          <$> send (receiveMessage (o ^. workerQueueUrl) & rmWaitTimeSeconds ?~ 20)
-  unless (null msgs) $
-    liftIO (printf "Received %d new messages, posting to worker.\n" (length msgs))
+  unless (Prelude.null msgs) $
+    liftIO (printf "Received %d new messages, posting to worker.\n" (Prelude.length msgs))
   forM_ msgs (forwardMessage o)
 
 

@@ -4,12 +4,17 @@
 module Main where
 
 import           Control.Lens
+import qualified Data.ByteString.Char8    as BS
 import           Data.Text                (Text)
 import qualified Data.Text                as Text
 import           Network.SQS.Daemon.Local
 import           System.Console.GetOpt
 import           System.Environment
 import           System.IO
+import           Text.Printf
+
+import qualified Data.Version             as Version
+import           Paths_sqsd_local
 
 data Options
   = Options { _daemonOptions :: DaemonOptions
@@ -25,6 +30,7 @@ defaultOptions workerQueueName' =
                                            , _workerQueueName = workerQueueName'
                                            , _deadLetterQueueName = Nothing
                                            , _httpTimeout = Just 30
+                                           , _contentType = BS.pack "application/octet-stream"
                                            }
           , _showHelp = False
           , _showVersion = False
@@ -46,13 +52,16 @@ options =
     "Print the CLI version"
   , Option "u" ["worker-url"]
     (ReqArg (set (daemonOptions . workerUrl) . Text.pack) "URL")
-    "Specify the worker URL to send POST requests to"
+    "Specify the worker URL to send POST requests to (default: http://localhost:5000)"
   , Option "d" ["dead-letter-queue-name"]
     (ReqArg (set (daemonOptions . deadLetterQueueName) . Just . Text.pack) "NAME")
-    "Name of the SQS queue to send messages to which the worker failed processing"
-  , Option "d" ["http-timeout"]
+    "Name of the SQS queue to send messages to which the worker failed processing (no default)"
+  , Option "T" ["http-timeout"]
     (ReqArg (set (daemonOptions . httpTimeout) . readMaybe) "NAME")
-    "Timeout for the HTTP POST request to worker"
+    "Timeout in seconds for the HTTP POST request to worker (default: 30)"
+  , Option "C" ["content-type"]
+    (ReqArg (set (daemonOptions . contentType) . BS.pack) "MEDIA_TYPE")
+    "Content-Type header value to use in HTTP POST request to worker (default: application/octet-stream)"
   ]
 
 usage :: String
@@ -72,8 +81,8 @@ parseOptions argv =
 runDaemon :: Options -> IO ()
 runDaemon =
   \case
-    opts | opts ^. showHelp -> putStrLn help
-    opts | opts ^. showVersion -> putStrLn "Version: ?"
+    opts | opts ^. showHelp -> hPutStr stderr help
+    opts | opts ^. showVersion -> hPutStrLn stderr (Version.showVersion version)
     opts -> startDaemon (opts ^. daemonOptions)
 
 main :: IO ()
