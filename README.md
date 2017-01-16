@@ -18,6 +18,7 @@ Options:
   -C MEDIA_TYPE  --content-type=MEDIA_TYPE      Content-Type header value to use in HTTP POST request to worker (default: application/octet-stream)
                  --sqs-host=MEDIA_TYPE          SQS endpoint host (default: localhost)
                  --sqs-port=MEDIA_TYPE          SQS endpoint port (default: 9324)
+                 --forked                       If messages should be POSTed to the worker concurrently (default: false)
 ```
 
 ## Install/Build
